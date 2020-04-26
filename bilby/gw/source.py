@@ -20,6 +20,70 @@ except ImportError:
                  " not be able to use some of the prebuilt functions.")
 
 
+def phase_TH_old(
+        frequency_array, mass_1, mass_2, H_eff5, H_eff8,
+        minimum_frequency=20):
+    """ Phase correction due to tidal heating
+        The spin-orbit interaction terms are missing plus issues with
+        positive-negative sign
+    """
+    # if mass_1 < mass_2:
+    # return None
+    import lal
+    mass_1 = mass_1
+    mass_2 = mass_2
+    m = mass_1 + mass_2
+    eta = mass_1 * mass_2 / m**2
+    deltaF = frequency_array[1] - frequency_array[0]
+    minIndx = int(minimum_frequency / deltaF)
+    frequency_array_effective = frequency_array[minIndx:]
+    v = np.cbrt(lal.PI * lal.G_SI * m * lal.MSUN_SI * frequency_array_effective) / lal.C_SI
+    phase_term1 = 3.0 / (128.0 * eta * v**5)
+    # 3.5 PN term
+    term_v7 = 5 * v**7 * (952 * eta + 995) / 168.0 * H_eff5
+    # 2.5 PN term
+    term_v5 = 10 * v**5 * (3 * np.log(v) + 1) / 9. * H_eff5
+    # 4PN term
+    term_v8 = 20 * v**8 * (3 * np.log(v) - 1) / 9.0 * H_eff8
+    delta_phase = phase_term1 * (term_v5 + term_v7 + term_v8)
+    delta_phase = np.concatenate((np.zeros(minIndx), delta_phase))
+    return delta_phase
+
+
+def phase_TH(
+        frequency_array, mass_1, mass_2, a_1, a_2, spin_1x, spin_1y, spin_1z,
+        spin_2x, spin_2y, spin_2z, H_eff5, H_eff8, start_frequency, delta_frequency):
+    """ Phase correction due to tidal heating
+        Added spin-orbit interaction term and corrected positive-negative sign
+    """
+    m = mass_1 + mass_2
+    eta = mass_1 * mass_2 / m**2
+    minIndx = int(start_frequency / delta_frequency)
+    frequency_array_effective = frequency_array[minIndx:]
+    v = np.cbrt(lal.PI * lal.G_SI * m * frequency_array_effective) / lal.C_SI
+    phase_term1 = 3.0 / (128.0 * eta * v**5)
+    # 3.5 PN term ** -ve sign added
+    term_v7 = - 5 * v**7 * (952 * eta + 995) / 168.0 * H_eff5
+    # 2.5 PN term ** -ve sign added ***
+    term_v5 = - 10 * v**5 * (3 * np.log(v) + 1) / 9. * H_eff5
+    # spin aligned case, to be added the precession effects
+    LdotS1 = spin_1z * 1
+    LdotS2 = spin_2z * 1
+    # spin-orbit interaction term
+    Psi_SO = 1. / 6. * ((- 56 * eta - 73 * (np.sqrt(1 - 4 * eta) - 1)) * LdotS1 * a_1 +
+                        (- 56 * eta - 73 * (np.sqrt(1 - 4 * eta) - 1)) * LdotS2 * a_2)
+    # 4PN term
+    term_v8 = 5 * v**8 * (3 * np.log(v) - 1) / 9.0 * (H_eff5 * Psi_SO - 4 * H_eff8)
+    delta_phase = phase_term1 * (term_v5 + term_v7 + term_v8)
+    delta_phase = np.concatenate((np.zeros(minIndx), delta_phase))
+    return delta_phase
+
+
+def ISCO(m1, m2):
+    "masses in solar mass unit"
+    return 1.0 / (6.0 * np.sqrt(6.0) * np.pi * (m1 + m2) * lal.MTSUN_SI)
+
+
 def lal_binary_black_hole(
         frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
         phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, **kwargs):
@@ -52,6 +116,7 @@ def lal_binary_black_hole(
         Angle between the total binary angular momentum and the line of sight
     phase: float
         The phase at coalescence
+    Newly added
     kwargs: dict
         Optional keyword arguments
         Supported arguments:
@@ -91,6 +156,9 @@ def lal_binary_black_hole(
         catch_waveform_errors=False, pn_spin_order=-1, pn_tidal_order=-1,
         pn_phase_order=-1, pn_amplitude_order=0)
     waveform_kwargs.update(kwargs)
+    if waveform_kwargs['waveform_approximant'] == 'TaylorF2':
+        f_isco = ISCO(mass_1, mass_2)
+        waveform_kwargs.update(maximum_frequency=f_isco)
     return _base_lal_cbc_fd_waveform(
         frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
         luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
@@ -98,10 +166,70 @@ def lal_binary_black_hole(
         phi_jl=phi_jl, **waveform_kwargs)
 
 
+def lal_binary_black_hole_tidal_heating(
+        frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
+        phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, H_eff5, H_eff8, **kwargs):
+
+    """ Phase correction to the horizon parameters are added to a Binary Black Hole waveform model using lalsimulation
+
+    Parameters
+    ----------
+    frequency_array: array_like
+    The frequencies at which we want to calculate the strain
+    mass_1: float
+    The mass of the heavier object in solar masses
+    mass_2: float
+    The mass of the lighter object in solar masses
+    luminosity_distance: float
+    The luminosity distance in megaparsec
+    a_1: float
+    Dimensionless primary spin magnitude
+    tilt_1: float
+    Primary tilt angle
+    phi_12: float
+    Azimuthal angle between the two component spins
+    a_2: float
+    Dimensionless secondary spin magnitude
+    tilt_2: float
+    Secondary tilt angle
+    phi_jl: float
+    Azimuthal angle between the total binary angular momentum and the
+    orbital angular momentum
+    theta_jn: float
+    Angle between the total binary angular momentum and the line of sight
+    phase: float
+    The phase at coalescence
+    H_eff5: float
+    2.5 PN order horizon parameter
+    H_eff8: float
+    4 PN order horizon parameter
+    kwargs: dict
+    Optional keyword arguments
+
+    Returns
+    -------
+    dict: A dictionary with the plus and cross polarisation strain modes
+    """
+    waveform_kwargs = dict(
+        waveform_approximant='HeatedTaylorF2', reference_frequency=50.0,
+        minimum_frequency=20.0, maximum_frequency=frequency_array[-1],
+        catch_waveform_errors=False, pn_spin_order=-1, pn_tidal_order=-1,
+        pn_phase_order=-1, pn_amplitude_order=0)
+    waveform_kwargs.update(kwargs)
+    approx = waveform_kwargs['waveform_approximant']
+    if approx == 'TaylorF2' or approx == 'HeatedTaylorF2':
+        f_isco = ISCO(mass_1, mass_2)
+        waveform_kwargs.update(maximum_frequency=f_isco)
+    return _base_lal_cbc_fd_waveform(
+        frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
+        luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
+        a_1=a_1, a_2=a_2, tilt_1=tilt_1, tilt_2=tilt_2, phi_12=phi_12,
+        phi_jl=phi_jl, H_eff5=H_eff5, H_eff8=H_eff8, **waveform_kwargs)
+
+
 def lal_binary_neutron_star(
         frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
-        phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, lambda_1, lambda_2,
-        **kwargs):
+        phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, lambda_1, lambda_2, **kwargs):
     """ A Binary Neutron Star waveform model using lalsimulation
 
     Parameters
@@ -174,11 +302,80 @@ def lal_binary_neutron_star(
         catch_waveform_errors=False, pn_spin_order=-1, pn_tidal_order=-1,
         pn_phase_order=-1, pn_amplitude_order=0)
     waveform_kwargs.update(kwargs)
+    if waveform_kwargs['waveform_approximant'] == 'TaylorF2':
+        f_isco = ISCO(mass_1, mass_2)
+        waveform_kwargs.update(maximum_frequency=f_isco)
     return _base_lal_cbc_fd_waveform(
         frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
         luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
         a_1=a_1, a_2=a_2, tilt_1=tilt_1, tilt_2=tilt_2, phi_12=phi_12,
         phi_jl=phi_jl, lambda_1=lambda_1, lambda_2=lambda_2, **waveform_kwargs)
+
+
+def lal_binary_neutron_star_tidal_heating(
+        frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
+        phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, lambda_1, lambda_2,
+        H_eff5, H_eff8, **kwargs):
+    """ Phase correction to the horizon parameters and tidal corrections
+    are added to a CBC waveform model using lalsimulation
+    Parameters
+    ----------
+    frequency_array: array_like
+    The frequencies at which we want to calculate the strain
+    mass_1: float
+    The mass of the heavier object in solar masses
+    mass_2: float
+    The mass of the lighter object in solar masses
+    luminosity_distance: float
+    The luminosity distance in megaparsec
+    a_1: float
+    Dimensionless primary spin magnitude
+    tilt_1: float
+    Primary tilt angle
+    phi_12: float
+    Azimuthal angle between the two component spins
+    a_2: float
+    Dimensionless secondary spin magnitude
+    tilt_2: float
+    Secondary tilt angle
+    phi_jl: float
+    Azimuthal angle between the total binary angular momentum and the
+    orbital angular momentum
+    theta_jn: float
+    Angle between the total binary angular momentum and the line of sight
+    phase: float
+    The phase at coalescence
+    lambda_1: float
+    Dimensional tidal deformalibilty of mass_1
+    lambda_2 : float
+    Dimensional tidal deformability of mass_2
+    H_eff5: float
+    2.5 PN order horizon parameter
+    H_eff8: float
+    4 PN order horizon parameter
+    kwargs: dict
+    Optional keyword arguments
+
+    Returns
+    -------
+    dict: A dictionary with the plus and cross polarisation strain modes
+    """
+    waveform_kwargs = dict(
+        waveform_approximant='HeatedTaylorF2', reference_frequency=50.0,
+        minimum_frequency=20.0, maximum_frequency=frequency_array[-1],
+        catch_waveform_errors=False, pn_spin_order=-1, pn_tidal_order=-1,
+        pn_phase_order=-1, pn_amplitude_order=0)
+    waveform_kwargs.update(kwargs)
+    approx = waveform_kwargs['waveform_approximant']
+    if approx == 'TaylorF2' or approx == 'HeatedTaylorF2':
+        f_isco = ISCO(mass_1, mass_2)
+        waveform_kwargs.update(maximum_frequency=f_isco)
+    return _base_lal_cbc_fd_waveform(
+        frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
+        luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
+        a_1=a_1, a_2=a_2, tilt_1=tilt_1, tilt_2=tilt_2, phi_12=phi_12,
+        phi_jl=phi_jl, lambda_1=lambda_1, lambda_2=lambda_2, H_eff5=H_eff5,
+        H_eff8=H_eff8, **waveform_kwargs)
 
 
 def lal_eccentric_binary_black_hole_no_spins(
@@ -250,7 +447,8 @@ def lal_eccentric_binary_black_hole_no_spins(
 def _base_lal_cbc_fd_waveform(
         frequency_array, mass_1, mass_2, luminosity_distance, theta_jn, phase,
         a_1=0.0, a_2=0.0, tilt_1=0.0, tilt_2=0.0, phi_12=0.0, phi_jl=0.0,
-        lambda_1=0.0, lambda_2=0.0, eccentricity=0.0, **waveform_kwargs):
+        lambda_1=0.0, lambda_2=0.0, eccentricity=0.0, H_eff5=0, H_eff8=0,
+        **waveform_kwargs):
     """ Generate a cbc waveform model using lalsimulation
 
     Parameters
@@ -292,7 +490,10 @@ def _base_lal_cbc_fd_waveform(
     -------
     dict: A dictionary with the plus and cross polarisation strain modes
     """
-    waveform_approximant = waveform_kwargs['waveform_approximant']
+    if waveform_kwargs['waveform_approximant'] == "HeatedTaylorF2":
+        waveform_approximant = "TaylorF2"
+    else:
+        waveform_approximant = waveform_kwargs['waveform_approximant']
     reference_frequency = waveform_kwargs['reference_frequency']
     minimum_frequency = waveform_kwargs['minimum_frequency']
     maximum_frequency = waveform_kwargs['maximum_frequency']
@@ -355,12 +556,26 @@ def _base_lal_cbc_fd_waveform(
     else:
         wf_func = lalsim_SimInspiralFD
     try:
-        hplus, hcross = wf_func(
-            mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
-            spin_2z, luminosity_distance, iota, phase,
-            longitude_ascending_nodes, eccentricity, mean_per_ano, delta_frequency,
-            start_frequency, maximum_frequency, reference_frequency,
-            waveform_dictionary, approximant)
+        if waveform_kwargs['waveform_approximant'] != "HeatedTaylorF2":
+            hplus, hcross = wf_func(
+                mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
+                spin_2z, luminosity_distance, iota, phase,
+                longitude_ascending_nodes, eccentricity, mean_per_ano, delta_frequency,
+                start_frequency, maximum_frequency, reference_frequency,
+                waveform_dictionary, approximant)
+        else:
+            hplus, hcross = wf_func(
+                mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
+                spin_2z, luminosity_distance, iota, phase,
+                longitude_ascending_nodes, eccentricity, mean_per_ano, delta_frequency,
+                start_frequency, maximum_frequency, reference_frequency,
+                waveform_dictionary, approximant)
+            heated_phase = phase_TH(
+                frequency_array, mass_1, mass_2, a_1, a_2, spin_1x, spin_1y, spin_1z,
+                spin_2x, spin_2y, spin_2z, H_eff5, H_eff8, start_frequency, delta_frequency)
+            expo_heated_phase = (np.cos(heated_phase) - 1j * np.sin(heated_phase))
+            hplus.data.data[:] = hplus.data.data * expo_heated_phase[:hplus.data.length]
+            hcross.data.data[:] = hcross.data.data * expo_heated_phase[:hplus.data.length]
     except Exception as e:
         if not catch_waveform_errors:
             raise
@@ -373,7 +588,8 @@ def _base_lal_cbc_fd_waveform(
                                          luminosity_distance=luminosity_distance,
                                          iota=iota, phase=phase,
                                          eccentricity=eccentricity,
-                                         start_frequency=start_frequency)
+                                         start_frequency=start_frequency,
+                                         Horizon=(H_eff5, H_eff8))
                 logger.warning("Evaluating the waveform failed with error: {}\n".format(e) +
                                "The parameters were {}\n".format(failed_parameters) +
                                "Likelihood will be set to -inf.")

@@ -307,6 +307,14 @@ class Result(object):
             else:
                 self._priors = PriorDict(priors)
             if self.parameter_labels is None:
+                if 'H_eff5' in self.search_parameter_keys:
+                    self.priors['H_eff5'].latex_label = '$H_{eff5}$'
+                if 'H_eff8' in self.search_parameter_keys:
+                    self.priors['H_eff8'].latex_label = '$H_{eff8}$'
+                if 'chi_1' in self.search_parameter_keys:
+                    self.priors['chi_1'].latex_label = '$\\chi_1$'
+                if 'chi_2' in self.search_parameter_keys:
+                    self.priors['chi_2'].latex_label = '$\\chi_2$'
                 self.parameter_labels = [self.priors[k].latex_label for k in
                                          self.search_parameter_keys]
             if self.parameter_labels_with_unit is None:
@@ -1640,6 +1648,14 @@ def make_pp_plot(results, filename=None, save=True, confidence_interval=[0.68, 0
             name = results[0].priors[key].latex_label
         except AttributeError:
             name = key
+        if name == 'H_eff5':
+            name = '$H_{eff5}$'
+        if name == 'H_eff8':
+            name = '$H_{eff8}$'
+        if name == 'chi_1':
+            name = '$\\chi_1$'
+        if name == 'chi_2':
+            name = '$\\chi_2$'
         label = "{} ({:2.3f})".format(name, pvalue)
         plt.plot(x_values, pp, lines[ii], label=label, **kwargs)
 
